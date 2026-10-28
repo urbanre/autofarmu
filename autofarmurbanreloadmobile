@@ -1,26 +1,28 @@
 --[[
-	URBAN RELOAD — AUTOFARM  [MOBILE · SAFE FARM]
-	Si sigue cerrando, apaga en CONFIG en este orden: usePrompts, useAim, useHighlights
+	URBAN RELOAD — AUTOFARM  [MOBILE · FULL TOUCH · AUTOSHOOT]
+	Flujo: engancha NPC -> apunta -> dispara solo.
+	Sin teclado, sin keybinds, todo táctil.
 ]]
 
 local CONFIG = {
-	warmup           = 3,
-	useFireButton    = false,   -- true = clickea el boton de fuego del juego (mas carga)
-	usePrompts       = true,
-	useAim           = true,
-	useHighlights    = true,
-	espMax           = 4,
-	espInterval      = 1.5,
-	activateInterval = 0.2,     -- 5 disparos/s
-	fireInterval     = 0.16,
-	promptInterval   = 1.0,
-	promptRadius     = 8,
-	promptMaxParts   = 40,
-	scanInterval     = 1.5,
-	scanCap          = 700,
-	scanRange        = 300,
-	moneyInterval    = 0.5,
-	aimInterval      = 0.12,
+	warmup        = 3,
+	scanInterval  = 1.2,
+	scanCap       = 700,
+	scanRange     = 250,
+	fireRange     = 220,
+	shootInterval = 0.13,
+	fireBtnInterval = 0.2,
+	promptInterval = 1.0,
+	promptRadius  = 8,
+	promptMaxParts = 40,
+	moneyInterval = 0.5,
+	espMax        = 4,
+	espInterval   = 1.5,
+	stuckTime     = 4.0,
+	blacklistTime = 6.0,
+	useFireButton = true,
+	usePrompts    = true,
+	useHighlights = true,
 }
 
 local Players = game:GetService("Players")
@@ -41,12 +43,20 @@ if getgenv then
 end
 local function alive() return getgenv == nil or getgenv().__urbanGen == GEN end
 
-pcall(function() RunService:UnbindFromRenderStep("UrbanAim") end)
 local viejo = playerGui:FindFirstChild("UrbanReloadRedWhiteMenu")
 if viejo then viejo:Destroy() end
 
 local function log(s) pcall(function() print("[UrbanFarm] " .. s) end) end
-log("build safe")
+log("autoshoot build")
+
+-- parámetros reusados (nada de Instance.new por iteración)
+local rayParams = RaycastParams.new()
+rayParams.FilterType = Enum.RaycastFilterType.Exclude
+rayParams.IgnoreWater = true
+
+local overlapParams = OverlapParams.new()
+overlapParams.FilterType = Enum.RaycastFilterType.Exclude
+overlapParams.MaxParts = CONFIG.promptMaxParts
 
 local function parseNumber(t)
 	if type(t) == "number" then return t end
@@ -96,7 +106,7 @@ screenGui.DisplayOrder = 500
 screenGui.Parent = playerGui
 
 local mainFrame = Instance.new("Frame")
-mainFrame.Size = UDim2.new(0, 300, 0, 336)
+mainFrame.Size = UDim2.new(0, 300, 0, 356)
 mainFrame.Position = UDim2.new(0, 12, 0, 62)
 mainFrame.BackgroundColor3 = Color3.fromRGB(12, 12, 16)
 mainFrame.BackgroundTransparency = 0.15
@@ -222,7 +232,8 @@ local function tarjeta(texto, alto)
 	return c, cs
 end
 
-local farmCard, farmStroke = tarjeta("Auto Farm & Combat", 56)
+-- tarjeta farm con línea de estado del objetivo
+local farmCard, farmStroke = tarjeta("Auto Farm & Autoshoot", 72)
 local farmBtn = Instance.new("TextButton")
 farmBtn.Size = UDim2.new(1, 0, 1, 0)
 farmBtn.BackgroundTransparency = 1
@@ -231,7 +242,7 @@ farmBtn.Parent = farmCard
 
 local farmPill = Instance.new("TextLabel")
 farmPill.Size = UDim2.new(0, 62, 0, 28)
-farmPill.Position = UDim2.new(1, -74, 0.5, -14)
+farmPill.Position = UDim2.new(1, -74, 0, 8)
 farmPill.BackgroundColor3 = Color3.fromRGB(34, 34, 46)
 farmPill.BorderSizePixel = 0
 farmPill.Text = "TAP"
@@ -243,6 +254,17 @@ farmPill.Parent = farmCard
 local fpc = Instance.new("UICorner")
 fpc.CornerRadius = UDim.new(0, 8)
 fpc.Parent = farmPill
+
+local targetLabel = Instance.new("TextLabel")
+targetLabel.Size = UDim2.new(1, -24, 0, 16)
+targetLabel.Position = UDim2.new(0, 14, 1, -24)
+targetLabel.BackgroundTransparency = 1
+targetLabel.Text = "sin objetivo"
+targetLabel.TextColor3 = Color3.fromRGB(140, 140, 165)
+targetLabel.TextSize = 10
+targetLabel.Font = Enum.Font.Gotham
+targetLabel.TextXAlignment = Enum.TextXAlignment.Left
+targetLabel.Parent = farmCard
 
 local espCard, espStroke = tarjeta("EspZombie", 52)
 local espToggle = Instance.new("TextButton")
@@ -291,18 +313,11 @@ local wpc = Instance.new("UICorner")
 wpc.CornerRadius = UDim.new(0, 8)
 wpc.Parent = walletPill
 
-local resetCard, resetStroke = tarjeta("Reiniciar sesión", 52)
-local resetBtn = Instance.new("TextButton")
-resetBtn.Size = UDim2.new(1, 0, 1, 0)
-resetBtn.BackgroundTransparency = 1
-resetBtn.Text = ""
-resetBtn.Parent = resetCard
-
 task.wait(0.15)
 
 local walletFrame = Instance.new("Frame")
 walletFrame.Size = UDim2.new(0, 176, 0, 124)
-walletFrame.Position = UDim2.new(0, 12, 0, 414)
+walletFrame.Position = UDim2.new(0, 12, 0, 434)
 walletFrame.BackgroundColor3 = Color3.fromRGB(12, 12, 16)
 walletFrame.BackgroundTransparency = 0.12
 walletFrame.BorderSizePixel = 0
@@ -483,12 +498,14 @@ local function leerDinero()
 end
 
 -- ==========================================
--- COMBATE
+-- ESTADO
 -- ==========================================
 local farmActive, espEnabled = false, false
-local targetPart = nil
+local targetPart, targetModel = nil, nil
+local targetSince = 0
 local espFolder, espObjects = nil, {}
 local fireButton = nil
+local blacklist = {}
 
 local FIRE = {"fire", "shoot", "attack", "atk", "disparo", "disparar", "shot"}
 
@@ -499,15 +516,12 @@ local function limpiarESP()
 	end
 end
 
-local function isVisible(part)
+local function esValido(part)
 	local myChar = localPlayer.Character
 	if not myChar then return false end
-	local p = RaycastParams.new()
-	p.FilterType = Enum.RaycastFilterType.Exclude
-	p.FilterDescendantsInstances = { myChar }
-	p.IgnoreWater = true
+	rayParams.FilterDescendantsInstances = { myChar }
 	local o = camera.CFrame.Position
-	local r = Workspace:Raycast(o, part.Position - o, p)
+	local r = Workspace:Raycast(o, part.Position - o, rayParams)
 	if r then return r.Instance:IsDescendantOf(part.Parent) end
 	return true
 end
@@ -547,12 +561,12 @@ local function tocar(btn)
 	end)
 end
 
--- escaneo capado
 local function escanear()
 	local myChar = localPlayer.Character
 	local root = myChar and myChar:FindFirstChild("HumanoidRootPart")
 	if not root then return {} end
 	local myPos = root.Position
+	local now = os.clock()
 	local out = {}
 	local n = 0
 
@@ -560,12 +574,15 @@ local function escanear()
 		n = n + 1
 		if n > CONFIG.scanCap then return end
 		if m:IsA("Model") and m ~= myChar and not Players:GetPlayerFromCharacter(m) then
-			local h = m:FindFirstChildOfClass("Humanoid")
-			local p = m:FindFirstChild("Head") or m:FindFirstChild("UpperTorso")
-			if h and h.Health > 0 and p then
-				local d = (p.Position - myPos).Magnitude
-				if d <= CONFIG.scanRange then
-					out[#out + 1] = { part = p, dist = d }
+			local exp = blacklist[m]
+			if not exp or exp < now then
+				local h = m:FindFirstChildOfClass("Humanoid")
+				local p = m:FindFirstChild("Head") or m:FindFirstChild("UpperTorso")
+				if h and h.Health > 0 and p then
+					local d = (p.Position - myPos).Magnitude
+					if d <= CONFIG.scanRange then
+						out[#out + 1] = { part = p, dist = d, model = m }
+					end
 				end
 			end
 		end
@@ -587,13 +604,13 @@ local function escanear()
 end
 
 -- ==========================================
--- PLANIFICADOR
+-- BUCLE PRINCIPAL
 -- ==========================================
 task.spawn(function()
 	task.wait(CONFIG.warmup)
-	log("planificador activo")
+	log("bucle activo")
 
-	local tEsp, tAct, tPrompt, tMoney, tScan, tFire, tRuntime, tBoton = 0,0,0,0,0,0,0,0
+	local tEsp, tShoot, tFireBtn, tPrompt, tMoney, tScan, tRuntime, tBoton = 0,0,0,0,0,0,0,0
 	local candidatos = {}
 
 	while alive() do
@@ -613,7 +630,6 @@ task.spawn(function()
 			if now - tMoney > CONFIG.moneyInterval then
 				tMoney = now
 				if not moneySource and now - tScan > 6 then
-					tScan = now
 					moneySource = buscarFuente()
 				end
 				local v = leerDinero()
@@ -638,7 +654,7 @@ task.spawn(function()
 					local lista = escanear()
 					local keep = {}
 					for i = 1, math.min(#lista, CONFIG.espMax) do
-						local m = lista[i].part.Parent
+						local m = lista[i].model
 						keep[m] = true
 						if not espObjects[m] then
 							local hl = Instance.new("Highlight")
@@ -661,50 +677,77 @@ task.spawn(function()
 			end
 
 			if farmActive and root and hum and hum.Health > 0 then
-				if not myChar:FindFirstChildOfClass("Tool") and now - tAct > 0.9 then
+				if not myChar:FindFirstChildOfClass("Tool") and now - tShoot > 0.9 then
 					equipar()
 				end
 
-				if now - tScan > CONFIG.scanInterval then
-					tScan = now
-					candidatos = escanear()
+				-- revalidar objetivo actual
+				local vigente = targetPart
+					and targetPart.Parent
+					and targetPart.Parent:FindFirstChildOfClass("Humanoid")
+					and targetPart.Parent:FindFirstChildOfClass("Humanoid").Health > 0
+					and (targetPart.Position - root.Position).Magnitude <= CONFIG.scanRange
+
+				if vigente and now - targetSince > CONFIG.stuckTime then
+					blacklist[targetModel] = now + CONFIG.blacklistTime
+					vigente = false
 				end
 
-				local elegido = nil
-				local probados = 0
-				for i = 1, #candidatos do
-					if probados >= 3 then break end
-					local c = candidatos[i]
-					if c.part and c.part.Parent then
-						probados = probados + 1
-						if isVisible(c.part) then
-							elegido = c.part
-							break
+				if not vigente then
+					if now - tScan > CONFIG.scanInterval then
+						tScan = now
+						candidatos = escanear()
+					end
+
+					local elegido = nil
+					local probados = 0
+					for i = 1, #candidatos do
+						if probados >= 3 then break end
+						local c = candidatos[i]
+						if c.part and c.part.Parent then
+							probados = probados + 1
+							if esValido(c.part) then
+								elegido = c
+								break
+							end
 						end
 					end
+
+					if elegido then
+						targetPart = elegido.part
+						targetModel = elegido.model
+						targetSince = now
+					else
+						targetPart = nil
+						targetModel = nil
+					end
 				end
 
-				targetPart = elegido
+				if targetPart and targetPart.Parent then
+					local dist = (targetPart.Position - root.Position).Magnitude
+					targetLabel.Text = string.format("%s  ·  %dm",
+						tostring(targetModel and targetModel.Name or "npc"), math.floor(dist))
 
-				if elegido then
-					if now - tAct > CONFIG.activateInterval then
-						tAct = now
-						local tool = myChar:FindFirstChildOfClass("Tool")
-						if tool then pcall(function() tool:Activate() end) end
+					if dist <= CONFIG.fireRange then
+						if now - tShoot > CONFIG.shootInterval then
+							tShoot = now
+							local tool = myChar:FindFirstChildOfClass("Tool")
+							if tool then pcall(function() tool:Activate() end) end
+						end
+						if CONFIG.useFireButton and fireButton and fireButton.Parent
+							and now - tFireBtn > CONFIG.fireBtnInterval then
+							tFireBtn = now
+							tocar(fireButton)
+						end
 					end
-					if CONFIG.useFireButton and fireButton and fireButton.Parent and now - tFire > CONFIG.fireInterval then
-						tFire = now
-						tocar(fireButton)
-					end
+				else
+					targetLabel.Text = "buscando..."
 				end
 
 				if CONFIG.usePrompts and now - tPrompt > CONFIG.promptInterval and fireproximityprompt then
 					tPrompt = now
-					local op = OverlapParams.new()
-					op.FilterType = Enum.RaycastFilterType.Exclude
-					op.FilterDescendantsInstances = { myChar }
-					op.MaxParts = CONFIG.promptMaxParts
-					local parts = Workspace:GetPartBoundsInRadius(root.Position, CONFIG.promptRadius, op)
+					overlapParams.FilterDescendantsInstances = { myChar }
+					local parts = Workspace:GetPartBoundsInRadius(root.Position, CONFIG.promptRadius, overlapParams)
 					for _, p in ipairs(parts) do
 						local pr = p:FindFirstChildOfClass("ProximityPrompt")
 						if pr then pcall(function() fireproximityprompt(pr) end) end
@@ -712,32 +755,58 @@ task.spawn(function()
 				end
 			elseif not farmActive then
 				targetPart = nil
+				targetModel = nil
 			end
 		end)
 		if not ok then log("error: " .. tostring(err)) end
-		task.wait(0.1)
+		task.wait(0.08)
 	end
 end)
 
-if CONFIG.useAim then
-	RunService:BindToRenderStep("UrbanAim", Enum.RenderPriority.Camera.Value + 1, function()
-		if not farmActive or not targetPart or not targetPart.Parent then return end
-		pcall(function()
-			camera.CFrame = CFrame.lookAt(camera.CFrame.Position, targetPart.Position)
-		end)
-	end)
-end
+-- ==========================================
+-- AIM (hilo propio, 30 Hz, sin RenderStepped)
+-- ==========================================
+task.spawn(function()
+	local tRot = 0
+	while alive() do
+		if farmActive and targetPart and targetPart.Parent then
+			local myChar = localPlayer.Character
+			local root = myChar and myChar:FindFirstChild("HumanoidRootPart")
+			if root then
+				local pos = targetPart.Position
+				pcall(function()
+					camera.CFrame = CFrame.lookAt(camera.CFrame.Position, pos)
+				end)
+				if os.clock() - tRot > 0.07 then
+					tRot = os.clock()
+					pcall(function()
+						root.CFrame = CFrame.lookAt(root.Position,
+							Vector3.new(pos.X, root.Position.Y, pos.Z))
+					end)
+				end
+			end
+		end
+		task.wait(0.033)
+	end
+end)
 
 -- ==========================================
 -- TOGGLES
 -- ==========================================
 local TI = TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 
+local function autoRotate(v)
+	local myChar = localPlayer.Character
+	local hum = myChar and myChar:FindFirstChildOfClass("Humanoid")
+	if hum then pcall(function() hum.AutoRotate = v end) end
+end
+
 local function toggleFarm()
 	local ok, err = pcall(function()
 		farmActive = not farmActive
 		if farmActive then
 			equipar()
+			autoRotate(false)
 			TweenService:Create(farmCard, TI, { BackgroundColor3 = Color3.fromRGB(120, 22, 22) }):Play()
 			TweenService:Create(farmStroke, TI, { Color3 = Color3.fromRGB(248, 113, 113) }):Play()
 			TweenService:Create(farmPill, TI, { BackgroundColor3 = Color3.fromRGB(200, 32, 32), TextColor3 = Color3.fromRGB(255, 255, 255) }):Play()
@@ -745,8 +814,12 @@ local function toggleFarm()
 			TweenService:Create(floatBtn, TI, { BackgroundColor3 = Color3.fromRGB(150, 26, 26) }):Play()
 			TweenService:Create(fs, TI, { Color3 = Color3.fromRGB(248, 113, 113) }):Play()
 			badgeTxt.Text = "ON"
+			targetLabel.Text = "buscando..."
 		else
 			targetPart = nil
+			targetModel = nil
+			blacklist = {}
+			autoRotate(true)
 			TweenService:Create(farmCard, TI, { BackgroundColor3 = Color3.fromRGB(20, 20, 28) }):Play()
 			TweenService:Create(farmStroke, TI, { Color3 = Color3.fromRGB(60, 60, 80) }):Play()
 			TweenService:Create(farmPill, TI, { BackgroundColor3 = Color3.fromRGB(34, 34, 46), TextColor3 = Color3.fromRGB(225, 225, 238) }):Play()
@@ -754,6 +827,7 @@ local function toggleFarm()
 			TweenService:Create(floatBtn, TI, { BackgroundColor3 = Color3.fromRGB(20, 20, 28) }):Play()
 			TweenService:Create(fs, TI, { Color3 = Color3.fromRGB(60, 60, 80) }):Play()
 			badgeTxt.Text = "OFF"
+			targetLabel.Text = "sin objetivo"
 		end
 	end)
 	if not ok then log("error toggle: " .. tostring(err)) end
@@ -786,10 +860,6 @@ espToggle.MouseButton1Click:Connect(toggleESP)
 
 walletBtn.MouseButton1Click:Connect(function() walletFrame.Visible = not walletFrame.Visible end)
 walletClose.MouseButton1Click:Connect(function() walletFrame.Visible = false end)
-resetBtn.MouseButton1Click:Connect(function()
-	sessionGain = 0
-	sessionValue.Text = "+$0"
-end)
 
 collapseBtn.MouseButton1Click:Connect(function() mainFrame.Visible = false end)
 menuBtn.MouseButton1Click:Connect(function() mainFrame.Visible = not mainFrame.Visible end)
@@ -797,6 +867,13 @@ menuBtn.MouseButton1Click:Connect(function() mainFrame.Visible = not mainFrame.V
 draggable(mainFrame, titleBar)
 draggable(walletFrame, walletHandle)
 
-localPlayer.CharacterAdded:Connect(function() targetPart = nil end)
+localPlayer.CharacterAdded:Connect(function()
+	targetPart = nil
+	targetModel = nil
+	if farmActive then
+		task.wait(0.5)
+		autoRotate(false)
+	end
+end)
 
 log("listo")
